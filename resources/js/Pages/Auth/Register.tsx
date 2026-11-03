@@ -9,6 +9,7 @@ import { FormEventHandler } from 'react';
 export default function Register() {
     const { data, setData, post, processing, errors, reset } = useForm({
         name: '',
+        store_name: '',
         email: '',
         password: '',
         password_confirmation: '',
@@ -42,6 +43,22 @@ export default function Register() {
                     />
 
                     <InputError message={errors.name} className="mt-2" />
+                </div>
+
+                <div className="mt-4">
+                    <InputLabel htmlFor="store_name" value="Nama Toko" />
+
+                    <TextInput
+                        id="store_name"
+                        name="store_name"
+                        value={data.store_name}
+                        className="mt-1 block w-full"
+                        autoComplete="organization"
+                        placeholder="Contoh: Toko Berkah Jaya"
+                        onChange={(e) => setData('store_name', e.target.value)}
+                    />
+
+                    <InputError message={errors.store_name} className="mt-2" />
                 </div>
 
                 <div className="mt-4">

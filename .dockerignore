@@ -1,0 +1,10 @@
+.git
+node_modules
+vendor
+public/build
+public/hot
+storage/*.key
+.env
+database/*.sqlite
+database/*.sqlite-*
+.phpunit.result.cache

@@ -1,0 +1,26 @@
+# PostgreSQL for local development (Fase 1 still runs on SQLite).
+# Usage:
+#   docker compose up -d
+#   enable `extension=pdo_pgsql` in php.ini
+#   set DB_CONNECTION=pgsql (see .env.example) and run: php artisan migrate --seed
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: quickretail-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: quickretail
+      POSTGRES_USER: quickretail
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quickretail -d quickretail"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

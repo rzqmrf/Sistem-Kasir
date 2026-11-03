@@ -3,11 +3,15 @@
 namespace Database\Seeders;
 
 use App\Models\Category;
+use App\Models\Outlet;
+use App\Models\OutletStock;
 use App\Models\Product;
 use App\Models\ProductPriceTier;
 use App\Models\Shift;
 use App\Models\StockMutation;
+use App\Models\Tenant;
 use App\Models\User;
+use App\Support\Tenancy\CurrentTenant;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -27,12 +31,31 @@ class DatabaseSeeder extends Seeder
             'role' => 'admin',
             'is_active' => true,
         ]);
+        $admin->forceFill(['is_super_admin' => true])->save();
 
         $cashier = User::create([
             'name' => 'Budi Kasir',
             'email' => 'kasir@quickretail.com',
             'password' => Hash::make('password123'),
             'role' => 'cashier',
+            'is_active' => true,
+        ]);
+
+        // 1b. Tenant (store). Everything below is created inside this tenant's context.
+        $currentTenant = app(CurrentTenant::class);
+        $demo = Tenant::create(['name' => 'Toko Demo QuickRetail', 'slug' => 'demo', 'status' => 'active']);
+        $demo->users()->attach($admin->id, ['role' => Tenant::ROLE_OWNER]);
+        $demo->users()->attach($cashier->id, ['role' => Tenant::ROLE_CASHIER]);
+        $mainOutlet = $demo->ensureMainOutlet();
+        $currentTenant->set($demo);
+        $currentTenant->setOutlet($mainOutlet);
+
+        $branchSudirman = Outlet::create([
+            'name' => 'Cabang Sudirman',
+            'code' => 'SDRM',
+            'address' => 'Jl. Jend. Sudirman No. 45',
+            'phone' => '081234567890',
+            'is_main' => false,
             'is_active' => true,
         ]);
 
@@ -210,6 +233,14 @@ class DatabaseSeeder extends Seeder
             }
         }
 
+        // Seed initial stock for second branch on all demo products
+        Product::all()->each(function (Product $product) use ($demo, $branchSudirman) {
+            OutletStock::where('outlet_id', $branchSudirman->id)
+                ->where('product_id', $product->id)
+                ->update(['stock' => 25]);
+            $product->recalculateTotalStock();
+        });
+
         // 4. Initial Open Shift for Cashier
         Shift::create([
             'user_id' => $cashier->id,
@@ -222,5 +253,37 @@ class DatabaseSeeder extends Seeder
             'status' => 'open',
             'notes' => 'Shift Pagi Kasir Utama',
         ]);
+
+        // 5. A second, independent store to demonstrate data isolation.
+        //    It reuses a barcode from the demo store: uniqueness is per tenant.
+        $otherOwner = User::create([
+            'name' => 'Pemilik Toko Sebelah',
+            'email' => 'owner@tokosebelah.com',
+            'password' => Hash::make('password123'),
+            'role' => 'admin',
+            'is_active' => true,
+        ]);
+
+        $other = Tenant::create(['name' => 'Toko Sebelah', 'slug' => 'toko-sebelah', 'status' => 'active']);
+        $other->users()->attach($otherOwner->id, ['role' => Tenant::ROLE_OWNER]);
+
+        $currentTenant->runAs($other, function () {
+            $category = Category::create(['name' => 'Sembako', 'slug' => 'sembako']);
+
+            Product::create([
+                'category_id' => $category->id,
+                'barcode' => '8991234567011',
+                'sku' => 'SBK-001',
+                'name' => 'Indomie Goreng (Toko Sebelah)',
+                'buy_price' => 2800,
+                'sell_price' => 3700,
+                'stock' => 40,
+                'min_stock_alert' => 10,
+                'unit' => 'pcs',
+                'is_active' => true,
+            ]);
+        });
+
+        $currentTenant->set(null);
     }
 }

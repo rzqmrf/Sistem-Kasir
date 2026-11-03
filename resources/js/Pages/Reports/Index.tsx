@@ -45,9 +45,16 @@ interface Props {
         links: any[];
         total: number;
     };
+    outlets?: {
+        id: number;
+        name: string;
+        code: string;
+        is_main: boolean;
+    }[];
     filters: {
         start_date: string;
         end_date: string;
+        outlet_id?: number | null;
     };
 }
 
@@ -57,16 +64,19 @@ export default function ReportsIndex({
     topProducts,
     shiftAudits,
     recentSales,
+    outlets = [],
     filters,
 }: Props) {
     const [startDate, setStartDate] = useState(filters.start_date);
     const [endDate, setEndDate] = useState(filters.end_date);
+    const [outletId, setOutletId] = useState(filters.outlet_id ? String(filters.outlet_id) : '');
 
     const handleFilter = (e: React.FormEvent) => {
         e.preventDefault();
         router.get(route('reports.index'), {
             start_date: startDate,
             end_date: endDate,
+            outlet_id: outletId || undefined,
         }, { preserveState: true });
     };
 
@@ -93,6 +103,22 @@ export default function ReportsIndex({
                     </div>
 
                     <form onSubmit={handleFilter} className="flex flex-wrap items-center gap-2 bg-slate-900 border border-slate-800 p-2 rounded-2xl">
+                        {outlets.length > 0 && (
+                            <select
+                                aria-label="Filter Cabang"
+                                value={outletId}
+                                onChange={(e) => setOutletId(e.target.value)}
+                                className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                            >
+                                <option value="">Semua Cabang</option>
+                                {outlets.map((o) => (
+                                    <option key={o.id} value={o.id}>
+                                        {o.name} ({o.code})
+                                    </option>
+                                ))}
+                            </select>
+                        )}
+
                         <div className="flex items-center gap-2 text-xs text-slate-300">
                             <Calendar className="h-4 w-4 text-emerald-400 ml-2" />
                             <span>Dari:</span>
@@ -329,7 +355,12 @@ export default function ReportsIndex({
                                         return (
                                             <tr key={shift.id} className="hover:bg-slate-800/40 transition">
                                                 <td className="px-4 py-3 font-bold text-slate-200">
-                                                    {shift.user?.name || 'Kasir'}
+                                                    <div>{shift.user?.name || 'Kasir'}</div>
+                                                    {shift.outlet && (
+                                                        <div className="text-[10px] font-mono font-normal text-slate-400">
+                                                            {shift.outlet.name} ({shift.outlet.code})
+                                                        </div>
+                                                    )}
                                                 </td>
                                                 <td className="px-4 py-3 text-slate-400">
                                                     {new Date(shift.opened_at).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' })}
@@ -412,7 +443,14 @@ export default function ReportsIndex({
                                         const profit = Number(sale.grand_total) - Number(sale.total_buy_price);
                                         return (
                                             <tr key={sale.id} className="hover:bg-slate-800/40 transition">
-                                                <td className="px-4 py-3 font-mono font-bold text-emerald-400">{sale.invoice_no}</td>
+                                                <td className="px-4 py-3 font-mono font-bold text-emerald-400">
+                                                    <div>{sale.invoice_no}</div>
+                                                    {sale.outlet && (
+                                                        <div className="text-[10px] font-normal text-slate-400">
+                                                            {sale.outlet.code}
+                                                        </div>
+                                                    )}
+                                                </td>
                                                 <td className="px-4 py-3 text-slate-400">
                                                     {new Date(sale.created_at).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' })}
                                                 </td>

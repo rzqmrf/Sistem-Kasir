@@ -3,12 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Models\Category;
-use App\Models\PaymentDetail;
 use App\Models\Product;
 use App\Models\Sale;
-use App\Models\SaleItem;
 use App\Models\Shift;
 use App\Models\StockMutation;
+use App\Support\Tenancy\CurrentTenant;
+use App\Support\Tenancy\TenantRules;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -21,12 +21,14 @@ class PosController extends Controller
     /**
      * Render the main Cashier POS screen
      */
-    public function index(Request $request): Response
+    public function index(Request $request, CurrentTenant $currentTenant): Response
     {
         $user = $request->user();
+        $outlet = $currentTenant->outletOrFail();
 
-        // Get active shift for this user
+        // Get active shift for this user in the active outlet
         $currentShift = Shift::where('user_id', $user->id)
+            ->where('outlet_id', $outlet->id)
             ->where('status', 'open')
             ->latest()
             ->with(['cashMutations'])
@@ -35,11 +37,12 @@ class PosController extends Controller
         $categories = Category::all();
 
         $products = Product::where('is_active', true)
-            ->with(['category', 'priceTiers'])
-            ->get();
+            ->with(['category', 'priceTiers', 'outletStocks'])
+            ->get()
+            ->map(fn (Product $product) => $product->hydrateOutletStock($outlet->id));
 
         // Get held orders from session
-        $heldOrders = session()->get('pos_held_orders', []);
+        $heldOrders = session()->get($this->heldOrdersKey(), []);
 
         return Inertia::render('Pos/Index', [
             'currentShift' => $currentShift,
@@ -52,9 +55,10 @@ class PosController extends Controller
     /**
      * Search product by barcode or name
      */
-    public function search(Request $request): JsonResponse
+    public function search(Request $request, CurrentTenant $currentTenant): JsonResponse
     {
         $query = $request->get('q', '');
+        $outlet = $currentTenant->outletOrFail();
 
         $products = Product::where('is_active', true)
             ->where(function ($q) use ($query) {
@@ -62,9 +66,10 @@ class PosController extends Controller
                     ->orWhere('name', 'like', "%{$query}%")
                     ->orWhere('sku', 'like', "%{$query}%");
             })
-            ->with(['priceTiers', 'category'])
+            ->with(['priceTiers', 'category', 'outletStocks'])
             ->take(15)
-            ->get();
+            ->get()
+            ->map(fn (Product $product) => $product->hydrateOutletStock($outlet->id));
 
         return response()->json($products);
     }
@@ -72,11 +77,11 @@ class PosController extends Controller
     /**
      * Process checkout transaction
      */
-    public function checkout(Request $request): JsonResponse
+    public function checkout(Request $request, CurrentTenant $currentTenant): JsonResponse
     {
         $request->validate([
             'items' => 'required|array|min:1',
-            'items.*.product_id' => 'required|exists:products,id',
+            'items.*.product_id' => ['required', TenantRules::exists('products')],
             'items.*.qty' => 'required|integer|min:1',
             'customer_name' => 'nullable|string|max:100',
             'payment_type' => 'required|in:cash,qris,transfer,debit',
@@ -85,18 +90,21 @@ class PosController extends Controller
         ]);
 
         $user = $request->user();
+        $outlet = $currentTenant->outletOrFail();
+
         $currentShift = Shift::where('user_id', $user->id)
+            ->where('outlet_id', $outlet->id)
             ->where('status', 'open')
             ->latest()
             ->first();
 
-        if (!$currentShift) {
+        if (! $currentShift) {
             return response()->json([
-                'message' => 'Laci kasir belum dibuka. Silakan buka shift terlebih dahulu.'
+                'message' => "Laci kasir di {$outlet->name} belum dibuka. Silakan buka shift terlebih dahulu.",
             ], 422);
         }
 
-        return DB::transaction(function () use ($request, $user, $currentShift) {
+        return DB::transaction(function () use ($request, $user, $outlet, $currentShift) {
             $itemsData = $request->items;
             $subtotal = 0;
             $totalBuyPrice = 0;
@@ -105,41 +113,47 @@ class PosController extends Controller
             // Generate unique invoice number: INV-YYYYMMDD-XXXX
             $datePrefix = now()->format('Ymd');
             $todayCount = Sale::whereDate('created_at', now()->toDateString())->count() + 1;
-            $invoiceNo = 'INV-' . $datePrefix . '-' . str_pad($todayCount, 4, '0', STR_PAD_LEFT);
+            $invoiceNo = 'INV-'.$datePrefix.'-'.str_pad($todayCount, 4, '0', STR_PAD_LEFT);
 
             foreach ($itemsData as $item) {
                 $product = Product::with('priceTiers')->lockForUpdate()->find($item['product_id']);
 
-                if (!$product) {
+                if (! $product) {
                     throw new \Exception("Produk ID {$item['product_id']} tidak ditemukan.");
                 }
 
-                if ($product->stock < $item['qty']) {
-                    throw new \Exception("Stok tidak mencukupi untuk {$product->name}. Stok tersedia: {$product->stock}");
+                $outletStock = $product->lockOutletStock($outlet->id);
+
+                if ($outletStock->stock < $item['qty']) {
+                    throw new \Exception("Stok tidak mencukupi untuk {$product->name} di {$outlet->name}. Stok tersedia: {$outletStock->stock}");
                 }
 
                 // Calculate price based on tiered pricing
                 $effectivePrice = $product->getPriceForQuantity((int) $item['qty']);
                 $itemSubtotal = $effectivePrice * (int) $item['qty'];
                 $itemDiscount = ($product->sell_price - $effectivePrice) * (int) $item['qty'];
-                if ($itemDiscount < 0) $itemDiscount = 0;
+                if ($itemDiscount < 0) {
+                    $itemDiscount = 0;
+                }
 
                 $subtotal += $itemSubtotal;
                 $totalBuyPrice += ((float) $product->buy_price * (int) $item['qty']);
 
-                // Deduct stock
-                $product->stock -= (int) $item['qty'];
-                $product->save();
+                // Deduct outlet stock and sync total stock
+                $outletStock->stock -= (int) $item['qty'];
+                $outletStock->save();
+                $product->recalculateTotalStock();
 
-                // Record stock mutation
+                // Record stock mutation for this outlet
                 StockMutation::create([
+                    'outlet_id' => $outlet->id,
                     'product_id' => $product->id,
                     'type' => 'sale',
                     'qty_change' => -(int) $item['qty'],
-                    'balance_stock' => $product->stock,
+                    'balance_stock' => $outletStock->stock,
                     'reference_type' => 'Sale',
-                    'reference_id' => null, // Will update with sale id
-                    'notes' => "Penjualan Kasir - Invoice {$invoiceNo}",
+                    'reference_id' => null,
+                    'notes' => "Penjualan Kasir ({$outlet->code}) - Invoice {$invoiceNo}",
                 ]);
 
                 $saleItemsPayload[] = [
@@ -157,11 +171,12 @@ class PosController extends Controller
             $changeAmount = max(0, $paidAmount - $grandTotal);
 
             if ($request->payment_type === 'cash' && $paidAmount < $grandTotal) {
-                throw new \Exception("Nominal pembayaran tunai kurang dari total tagihan.");
+                throw new \Exception('Nominal pembayaran tunai kurang dari total tagihan.');
             }
 
             // Create Sale record
             $sale = Sale::create([
+                'outlet_id' => $outlet->id,
                 'invoice_no' => $invoiceNo,
                 'shift_id' => $currentShift->id,
                 'cashier_id' => $user->id,
@@ -179,7 +194,7 @@ class PosController extends Controller
 
             // Save sale items
             foreach ($saleItemsPayload as $sItem) {
-                $saleItem = $sale->items()->create($sItem);
+                $sale->items()->create($sItem);
             }
 
             // Save payment detail
@@ -194,7 +209,7 @@ class PosController extends Controller
             $currentShift->save();
 
             // Load full relationships for receipt
-            $sale->load(['items.product', 'cashier', 'paymentDetails']);
+            $sale->load(['items.product', 'cashier', 'paymentDetails', 'outlet']);
 
             return response()->json([
                 'message' => 'Transaksi berhasil diproses',
@@ -213,18 +228,18 @@ class PosController extends Controller
             'customer_name' => 'nullable|string',
         ]);
 
-        $heldOrders = session()->get('pos_held_orders', []);
+        $heldOrders = session()->get($this->heldOrdersKey(), []);
 
         $newOrder = [
             'id' => (string) Str::uuid(),
-            'customer_name' => $request->customer_name ?: 'Pelanggan #' . (count($heldOrders) + 1),
+            'customer_name' => $request->customer_name ?: 'Pelanggan #'.(count($heldOrders) + 1),
             'items' => $request->items,
             'held_at' => now()->toIso8601String(),
             'total_items' => array_sum(array_column($request->items, 'qty')),
         ];
 
         $heldOrders[] = $newOrder;
-        session()->put('pos_held_orders', $heldOrders);
+        session()->put($this->heldOrdersKey(), $heldOrders);
 
         return response()->json([
             'message' => 'Transaksi berhasil diparkir / di-hold',
@@ -237,13 +252,23 @@ class PosController extends Controller
      */
     public function releaseHeldOrder(Request $request, string $id): JsonResponse
     {
-        $heldOrders = session()->get('pos_held_orders', []);
+        $heldOrders = session()->get($this->heldOrdersKey(), []);
         $heldOrders = array_values(array_filter($heldOrders, fn ($order) => $order['id'] !== $id));
-        session()->put('pos_held_orders', $heldOrders);
+        session()->put($this->heldOrdersKey(), $heldOrders);
 
         return response()->json([
             'message' => 'Order berhasil dipulihkan',
             'heldOrders' => $heldOrders,
         ]);
+    }
+
+    /**
+     * Held orders are kept per store and per outlet so switching stores/outlets never mixes carts.
+     */
+    private function heldOrdersKey(): string
+    {
+        $ctx = app(CurrentTenant::class);
+
+        return 'pos_held_orders.'.$ctx->id().'.'.$ctx->outletId();
     }
 }

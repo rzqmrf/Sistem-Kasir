@@ -1,5 +1,5 @@
 import AuthenticatedLayout from '@/Layouts/AuthenticatedLayout';
-import { Head, router } from '@inertiajs/react';
+import { Head, router, usePage } from '@inertiajs/react';
 import { 
     Package, 
     Plus, 
@@ -34,6 +34,7 @@ interface Props {
 }
 
 export default function ProductsIndex({ products, categories, filters }: Props) {
+    const { outlet, outlets = [] } = usePage().props;
     const [search, setSearch] = useState(filters.search || '');
     const [categoryId, setCategoryId] = useState(filters.category_id || '');
 
@@ -265,7 +266,9 @@ export default function ProductsIndex({ products, categories, filters }: Props) 
                                     <th className="px-4 py-3.5">Harga Beli (HPP)</th>
                                     <th className="px-4 py-3.5">Harga Jual</th>
                                     <th className="px-4 py-3.5">Harga Grosir</th>
-                                    <th className="px-4 py-3.5 text-center">Stok</th>
+                                    <th className="px-4 py-3.5 text-center">
+                                        Stok {outlet ? `(${outlet.code})` : ''}
+                                    </th>
                                     <th className="px-4 py-3.5 text-right">Aksi</th>
                                 </tr>
                             </thead>
@@ -323,6 +326,11 @@ export default function ProductsIndex({ products, categories, filters }: Props) 
                                                         {isLowStock && <AlertTriangle className="h-3 w-3" />}
                                                         {product.stock} {product.unit}
                                                     </span>
+                                                    {outlets.length > 1 && product.total_stock !== undefined && (
+                                                        <div className="text-[10px] text-slate-500 mt-1">
+                                                            Total cabang: {product.total_stock}
+                                                        </div>
+                                                    )}
                                                 </td>
                                                 <td className="px-4 py-3 text-right">
                                                     <div className="flex items-center justify-end gap-1.5">

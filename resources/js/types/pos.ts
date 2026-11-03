@@ -20,6 +20,7 @@ export interface Product {
     buy_price: number | string;
     sell_price: number | string;
     stock: number;
+    total_stock?: number;
     min_stock_alert: number;
     unit: string;
     is_active: boolean;
@@ -48,6 +49,7 @@ export interface CashMutation {
 
 export interface Shift {
     id: number;
+    outlet_id?: number | null;
     user_id: number;
     opened_at: string;
     closed_at: string | null;
@@ -62,6 +64,11 @@ export interface Shift {
         id: number;
         name: string;
         email: string;
+    };
+    outlet?: {
+        id: number;
+        name: string;
+        code: string;
     };
 }
 
@@ -119,5 +126,10 @@ export interface Sale {
     cashier?: {
         id: number;
         name: string;
+    };
+    outlet?: {
+        id: number;
+        name: string;
+        code: string;
     };
 }

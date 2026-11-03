@@ -17,7 +17,23 @@ return Application::configure(basePath: dirname(__DIR__))
             \Illuminate\Http\Middleware\AddLinkHeadersForPreloadedAssets::class,
         ]);
 
-        //
+        $middleware->alias([
+            'tenant' => \App\Http\Middleware\ResolveTenant::class,
+            'role' => \App\Http\Middleware\EnsureTenantRole::class,
+            'subscribed' => \App\Http\Middleware\EnsureActiveSubscription::class,
+            'super_admin' => \App\Http\Middleware\EnsureSuperAdmin::class,
+        ]);
+
+        // Midtrans posts notifications server-to-server; they are authenticated by signature instead.
+        $middleware->validateCsrfTokens(except: [
+            'webhooks/midtrans',
+        ]);
+
+        // Tenant must be resolved before route-model binding so {product} etc. are tenant-scoped.
+        $middleware->prependToPriorityList(
+            before: \Illuminate\Routing\Middleware\SubstituteBindings::class,
+            prepend: \App\Http\Middleware\ResolveTenant::class,
+        );
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

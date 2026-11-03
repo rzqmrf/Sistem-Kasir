@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\CashMutation;
 use App\Models\Shift;
+use App\Support\Tenancy\CurrentTenant;
+use App\Support\Tenancy\TenantRules;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -11,9 +13,9 @@ use Illuminate\Http\Request;
 class ShiftController extends Controller
 {
     /**
-     * Open a new cashier shift
+     * Open a new cashier shift in the active outlet
      */
-    public function open(Request $request): RedirectResponse
+    public function open(Request $request, CurrentTenant $currentTenant): RedirectResponse
     {
         $request->validate([
             'starting_cash' => 'required|numeric|min:0',
@@ -21,17 +23,20 @@ class ShiftController extends Controller
         ]);
 
         $user = $request->user();
+        $outlet = $currentTenant->outletOrFail();
 
-        // Check if there is already an open shift
+        // Check if there is already an open shift for this user in the active outlet
         $existing = Shift::where('user_id', $user->id)
+            ->where('outlet_id', $outlet->id)
             ->where('status', 'open')
             ->first();
 
         if ($existing) {
-            return back()->with('error', 'Anda sudah memiliki shift yang aktif.');
+            return back()->with('error', "Anda sudah memiliki shift yang aktif di {$outlet->name}.");
         }
 
         Shift::create([
+            'outlet_id' => $outlet->id,
             'user_id' => $user->id,
             'opened_at' => now(),
             'starting_cash' => $request->starting_cash,
@@ -40,7 +45,7 @@ class ShiftController extends Controller
             'notes' => $request->notes,
         ]);
 
-        return back()->with('success', 'Shift kasir berhasil dibuka.');
+        return back()->with('success', "Shift kasir di {$outlet->name} berhasil dibuka.");
     }
 
     /**
@@ -49,7 +54,7 @@ class ShiftController extends Controller
     public function addMutation(Request $request): JsonResponse
     {
         $request->validate([
-            'shift_id' => 'required|exists:shifts,id',
+            'shift_id' => ['required', TenantRules::exists('shifts')],
             'type' => 'required|in:in,out',
             'amount' => 'required|numeric|min:1',
             'reason' => 'required|string|max:255',
@@ -85,7 +90,7 @@ class ShiftController extends Controller
     public function close(Request $request): JsonResponse
     {
         $request->validate([
-            'shift_id' => 'required|exists:shifts,id',
+            'shift_id' => ['required', TenantRules::exists('shifts')],
             'actual_cash' => 'required|numeric|min:0',
             'notes' => 'nullable|string',
         ]);
